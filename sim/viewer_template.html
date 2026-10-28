@@ -1,0 +1,449 @@
+<title>Fault Flight Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: full-bleed 3D pitch; status cards float top-left, playback bar pinned to the bottom.
+   Single look on purpose: a daylight pitch with dark instrument panels. */
+:root {
+  --sky: #cddfee;
+  --panel: rgba(17, 23, 30, 0.84);
+  --panel-line: rgba(255, 255, 255, 0.12);
+  --ink: #f2f5f8;
+  --ink-dim: #a7b2bf;
+  --ours: #ff8a3d;
+  --stock: #c3cad3;
+  --weak: #ff5252;
+  --ok: #5cc48a;
+  --display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { margin: 0; background: var(--sky); color: var(--ink); font: 14px/1.4 var(--body); overflow: hidden; }
+#stage { position: fixed; inset: 0; }
+#stage canvas { display: block; touch-action: none; }
+
+.hud {
+  position: fixed; z-index: 2; pointer-events: none;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: max(16px, env(safe-area-inset-left, 0px));
+  width: min(290px, calc(100vw - 32px));
+  display: grid; gap: 8px;
+}
+.title { font: 700 20px/1.1 var(--display); color: #17202a; letter-spacing: 0.01em; }
+.title small { display: block; font: 500 12px var(--body); color: #3c4a58; letter-spacing: 0; margin-top: 2px; }
+.card { background: var(--panel); border: 1px solid var(--panel-line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 7px; }
+.card[hidden] { display: none; }
+.card-head { display: flex; align-items: center; gap: 8px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.name { font: 700 15px var(--display); letter-spacing: 0.02em; flex: 1; }
+.chip { font: 600 11px var(--mono); letter-spacing: 0.06em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--panel-line); color: var(--ink-dim); }
+.chip.fault { color: #17202a; background: var(--ours); border-color: var(--ours); }
+.chip.bad { color: #fff; background: var(--weak); border-color: var(--weak); }
+.chip.good { color: #0e2416; background: var(--ok); border-color: var(--ok); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.stat { display: grid; }
+.stat b { font: 600 14px var(--mono); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 10.5px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+.motors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.motor { display: grid; gap: 3px; }
+.bar { height: 34px; background: rgba(255, 255, 255, 0.07); border-radius: 4px; position: relative; overflow: hidden; }
+.bar i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--ink-dim); border-radius: 4px 4px 0 0; }
+.bar .cap { position: absolute; left: 0; right: 0; height: 1px; background: var(--weak); opacity: 0; }
+.motor.weak .bar i { background: var(--weak); }
+.motor.weak .cap { opacity: 1; }
+.motor label { font: 600 10.5px var(--mono); color: var(--ink-dim); display: flex; justify-content: space-between; }
+
+.banner {
+  position: fixed; z-index: 3; left: 50%; transform: translateX(-50%);
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  background: var(--weak); color: #fff; font: 700 16px var(--display); letter-spacing: 0.02em;
+  padding: 8px 14px; border-radius: 8px; max-width: calc(100vw - 32px); text-align: center;
+}
+
+.bar-controls {
+  position: fixed; z-index: 2;
+  left: max(16px, env(safe-area-inset-left, 0px));
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--panel); border: 1px solid var(--panel-line); border-radius: 12px;
+  padding: 10px 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+}
+button, select {
+  font: 600 13px var(--body); color: var(--ink); background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-line); border-radius: 8px; padding: 6px 10px; cursor: pointer;
+}
+button:hover, select:hover { background: rgba(255, 255, 255, 0.16); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--ours); outline-offset: 2px; }
+button.on { background: var(--ours); border-color: var(--ours); color: #17202a; }
+#play { min-width: 74px; }
+.seg { display: inline-flex; gap: 2px; }
+.seg button { padding: 6px 8px; }
+.time { font: 600 13px var(--mono); font-variant-numeric: tabular-nums; min-width: 92px; }
+.scrub { position: relative; flex: 1 1 260px; min-width: 0; display: flex; align-items: center; }
+.scrub input { width: 100%; accent-color: var(--ours); }
+.scrub .tick { position: absolute; top: -6px; width: 2px; height: 8px; background: var(--weak); pointer-events: none; }
+.toggles { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; color: var(--ink-dim); }
+.toggles label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.err { position: fixed; inset: 0; display: grid; place-items: center; color: #17202a; font: 600 16px var(--body); padding: 24px; text-align: center; }
+@media (max-width: 640px) {
+  .hud { width: calc(100vw - 32px); grid-template-columns: 1fr 1fr; }
+  .title { grid-column: 1 / -1; }
+  .motors .bar { height: 22px; }
+  .stats { grid-template-columns: 1fr 1fr; }
+  .stat:nth-child(3) { display: none; }
+}
+</style>
+
+<div id="stage"></div>
+<div class="hud" id="hud">
+  <div class="title">Fault Flight Viewer<small id="subtitle"></small></div>
+</div>
+<div class="banner" id="banner" hidden></div>
+<div class="bar-controls">
+  <button id="play" type="button">Pause</button>
+  <button id="restart" type="button">Restart</button>
+  <button id="jump" type="button">Jump to fault</button>
+  <div class="seg" role="group" aria-label="Playback speed">
+    <button type="button" data-speed="0.25">¼×</button>
+    <button type="button" data-speed="0.5">½×</button>
+    <button type="button" data-speed="1" class="on">1×</button>
+    <button type="button" data-speed="2">2×</button>
+  </div>
+  <span class="time" id="time">0.0 s</span>
+  <div class="scrub"><input id="scrub" type="range" min="0" max="1" step="0.01" value="0" aria-label="Flight time"><div class="tick" id="tick" hidden></div></div>
+  <select id="cam" aria-label="Camera">
+    <option value="orbit">Camera: free (drag)</option>
+    <option value="follow">Camera: follow ours</option>
+    <option value="top">Camera: from above</option>
+  </select>
+  <div class="toggles">
+    <label><input type="checkbox" id="show-ours" checked> Ours</label>
+    <label><input type="checkbox" id="show-stock" checked> Stock</label>
+    <label><input type="checkbox" id="big" checked> Enlarge drone ×4</label>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const DATA = /*__DATA__*/null;
+const META = DATA.meta;
+const NAMES = { ours: "Our controller", stock: "Stock controller" };
+const COLORS = { ours: 0xff8a3d, stock: 0xc3cad3 };
+const CSS_COLORS = { ours: "var(--ours)", stock: "var(--stock)" };
+const ENLARGE = 4;
+const FAULT_T = META.fault_time;
+const WEAK = META.fault_motor - 1;
+const T_END = Math.max(...Object.values(DATA.runs).map(r => r.t[r.t.length - 1])) + 1.5;
+
+// ---------- scene ----------
+const stage = document.getElementById("stage");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xcddfee);
+scene.fog = new THREE.Fog(0xcddfee, 14, 45);
+const side = META.side;
+const center = new THREE.Vector3(side / 2, 0.45, -side / 2);
+const camera = new THREE.PerspectiveCamera(48, 1, 0.01, 200);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.49;
+controls.minDistance = 0.3;
+controls.maxDistance = 25;
+function homeCamera() {
+  camera.position.set(-1.4, 1.55, 1.9);
+  controls.target.copy(center);
+}
+homeCamera();
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x4c7a38, 0.75));
+const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+sun.position.set(3, 7, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 1, far: 20 });
+sun.target.position.copy(center);
+scene.add(sun, sun.target);
+
+// Pitch: mowing stripes, halfway line and the centre circle around our rectangle.
+function pitchTexture() {
+  const px = 1024, metres = 80, k = px / metres;
+  const c = document.createElement("canvas");
+  c.width = c.height = px;
+  const g = c.getContext("2d");
+  for (let i = 0; i < 16; i++) {
+    g.fillStyle = i % 2 ? "#5a9a43" : "#53913e";
+    g.fillRect(i * px / 16, 0, px / 16, px);
+  }
+  g.strokeStyle = "rgba(255,255,255,0.92)";
+  g.lineWidth = 0.12 * k + 1.5;
+  g.beginPath(); g.moveTo(px / 2, 0); g.lineTo(px / 2, px); g.stroke();
+  g.beginPath(); g.arc(px / 2, px / 2, 9.15 * k, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = "#fff";
+  g.beginPath(); g.arc(px / 2, px / 2, 0.25 * k, 0, Math.PI * 2); g.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshLambertMaterial({ map: pitchTexture() }));
+ground.rotation.x = -Math.PI / 2;
+ground.position.set(center.x + 4.5, 0, center.z);
+ground.receiveShadow = true;
+scene.add(ground);
+
+function textSprite(text, color = "#17202a", size = 0.13) {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const g = c.getContext("2d");
+  g.font = "700 88px 'Barlow Semi Condensed', Arial, sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = "rgba(255,255,255,0.88)";
+  g.beginPath(); g.arc(64, 64, 56, 0, Math.PI * 2); g.fill();
+  g.fillStyle = color; g.fillText(text, 64, 68);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  sprite.scale.set(size, size, 1);
+  return sprite;
+}
+
+// Planned rectangle (dashed), corner poles and labels.
+const corners = META.corners.map(c => new THREE.Vector3(...c));
+const path = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([...corners, corners[0]]),
+  new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.07, gapSize: 0.05 }));
+path.computeLineDistances();
+scene.add(path);
+"ABCD".split("").forEach((letter, i) => {
+  const c = corners[i];
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, c.y, 8), new THREE.MeshLambertMaterial({ color: 0xf2f2f2 }));
+  pole.position.set(c.x, c.y / 2, c.z);
+  pole.castShadow = true;
+  const label = textSprite(letter);
+  label.position.set(c.x + (i === 0 || i === 3 ? -0.12 : 0.12), 0.1, c.z + (i < 2 ? 0.12 : -0.12));
+  scene.add(pole, label);
+});
+
+// ---------- drones ----------
+function makeDrone(name) {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.012, 0.03),
+    new THREE.MeshStandardMaterial({ color: COLORS[name], roughness: 0.5, metalness: 0.1 }));
+  body.castShadow = true;
+  group.add(body);
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  nose.position.set(0.019, 0.002, 0);
+  group.add(nose);
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x2b333d, roughness: 0.6 });
+  const m = META.motors.map(v => new THREE.Vector3(...v));
+  [[0, 2], [1, 3]].forEach(([a, b]) => {
+    const dir = new THREE.Vector3().subVectors(m[b], m[a]);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(dir.length(), 0.004, 0.006), armMat);
+    arm.position.addVectors(m[a], m[b]).multiplyScalar(0.5);
+    arm.rotation.y = -Math.atan2(dir.z, dir.x);
+    arm.castShadow = true;
+    group.add(arm);
+  });
+  const pods = [], blades = [];
+  m.forEach((pos, i) => {
+    const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.012, 16),
+      new THREE.MeshStandardMaterial({ color: 0x2b333d, roughness: 0.4 }));
+    pod.position.copy(pos);
+    pod.castShadow = true;
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(0.023, 28),
+      new THREE.MeshBasicMaterial({ color: 0xe7edf3, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false }));
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.set(pos.x, 0.0075, pos.z);
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.0012, 0.005), new THREE.MeshBasicMaterial({ color: 0x1d242c }));
+    blade.position.set(pos.x, 0.0078, pos.z);
+    blade.userData.dir = (i % 2 === 0) ? 1 : -1;      // M1, M3 spin one way; M2, M4 the other
+    group.add(pod, disc, blade);
+    pods.push(pod); blades.push(blade);
+  });
+  const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), 0.075, 0x2f7de1, 0.016, 0.01);
+  group.add(arrow);
+  const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.03, 24),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22, depthWrite: false }));
+  shadow.rotation.x = -Math.PI / 2;
+  scene.add(group, shadow);
+
+  const run = DATA.runs[name];
+  const n = run.t.length;
+  const trailPts = new Float32Array(n * 3);
+  trailPts.set(run.p.slice(0, n * 3));
+  const trailGeo = new THREE.BufferGeometry();
+  trailGeo.setAttribute("position", new THREE.BufferAttribute(trailPts, 3));
+  const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: COLORS[name] }));
+  scene.add(trail);
+  return { name, run, group, pods, blades, shadow, trail, n };
+}
+
+const drones = Object.keys(DATA.runs).sort((a, b) => (a === "ours" ? -1 : 1)).map(makeDrone);
+
+// Fault marker where our drone was when the motor was capped.
+if (FAULT_T != null && DATA.runs.ours) {
+  const r = DATA.runs.ours, i = Math.max(0, r.t.findIndex(t => t >= FAULT_T));
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.045, 0.06, 32),
+    new THREE.MeshBasicMaterial({ color: 0xff3b3b, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(r.p[3 * i], 0.003, r.p[3 * i + 2]);
+  scene.add(ring);
+}
+
+// ---------- HUD ----------
+const hud = document.getElementById("hud");
+document.getElementById("subtitle").textContent =
+  (FAULT_T != null ? `Motor M${META.fault_motor} capped at 50% RPM at t = ${FAULT_T.toFixed(1)} s` : "No fault in this run") +
+  " · rectangle " + side + " m";
+drones.forEach(d => {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="card-head"><span class="dot" style="background:${CSS_COLORS[d.name]}"></span>
+      <span class="name">${NAMES[d.name]}</span><span class="chip">HOLD</span></div>
+    <div class="stats">
+      <div class="stat"><b data-k="tilt">0°</b><span>tilt</span></div>
+      <div class="stat"><b data-k="spin">0°/s</b><span>spin</span></div>
+      <div class="stat"><b data-k="z">0.80 m</b><span>height</span></div>
+    </div>
+    <div class="motors">${[1, 2, 3, 4].map(k => `
+      <div class="motor"><div class="bar"><i></i><div class="cap"></div></div>
+      <label><span>M${k}</span><span data-f>0</span></label></div>`).join("")}</div>`;
+  hud.appendChild(card);
+  d.card = card;
+  d.chip = card.querySelector(".chip");
+  d.fields = Object.fromEntries([...card.querySelectorAll("[data-k]")].map(el => [el.dataset.k, el]));
+  d.motorEls = [...card.querySelectorAll(".motor")].map(el => ({
+    root: el, fill: el.querySelector(".bar i"), cap: el.querySelector(".cap"), value: el.querySelector("[data-f]"),
+  }));
+  d.motorEls.forEach(mel => { mel.cap.style.bottom = "25%"; });   // the weak motor's cap: 25% of max thrust
+});
+
+// ---------- playback ----------
+let t = 0, speed = 1, playing = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const scrub = document.getElementById("scrub");
+scrub.max = T_END.toFixed(2);
+const tick = document.getElementById("tick");
+if (FAULT_T != null) { tick.hidden = false; tick.style.left = `calc(${(FAULT_T / T_END) * 100}% - 1px)`; }
+const playBtn = document.getElementById("play");
+function setPlaying(on) { playing = on; playBtn.textContent = on ? "Pause" : "Play"; }
+setPlaying(playing);
+playBtn.onclick = () => { if (t >= T_END) t = 0; setPlaying(!playing); };
+document.getElementById("restart").onclick = () => { t = 0; setPlaying(true); };
+document.getElementById("jump").onclick = () => { t = Math.max(0, (FAULT_T ?? 0) - 1.5); setPlaying(true); };
+document.querySelectorAll("[data-speed]").forEach(b => b.onclick = () => {
+  speed = parseFloat(b.dataset.speed);
+  document.querySelectorAll("[data-speed]").forEach(x => x.classList.toggle("on", x === b));
+});
+scrub.oninput = () => { t = parseFloat(scrub.value); };
+const camSel = document.getElementById("cam");
+camSel.onchange = () => {
+  if (camSel.value === "top") { camera.position.set(center.x, 4.2, center.z + 0.01); controls.target.copy(center); }
+  if (camSel.value === "orbit") homeCamera();
+};
+const show = { ours: document.getElementById("show-ours"), stock: document.getElementById("show-stock") };
+const big = document.getElementById("big");
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.code === "Space") { e.preventDefault(); setPlaying(!playing); }
+  if (e.code === "ArrowRight") t = Math.min(T_END, t + 1);
+  if (e.code === "ArrowLeft") t = Math.max(0, t - 1);
+});
+
+const qa = new THREE.Quaternion(), qb = new THREE.Quaternion();
+function frameAt(run, time) {
+  const T = run.t;
+  let lo = 0, hi = T.length - 1;
+  if (time >= T[hi]) return { i: hi, a: 0 };
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (T[mid] <= time) lo = mid; else hi = mid; }
+  return { i: lo, a: Math.max(0, Math.min(1, (time - T[lo]) / (T[lo + 1] - T[lo]))) };
+}
+
+const banner = document.getElementById("banner");
+function update(dtReal) {
+  const scale = big.checked ? ENLARGE : 1;
+  drones.forEach(d => {
+    const visible = show[d.name].checked;
+    d.group.visible = d.shadow.visible = d.trail.visible = visible;
+    d.card.hidden = !visible;
+    const r = d.run;
+    const { i, a } = frameAt(r, t);
+    const j = Math.min(i + 1, d.n - 1);
+    const ended = t > r.t[d.n - 1];
+    const crashed = ended && META.outcomes[d.name].startsWith("CRASHED");
+    const p = [0, 1, 2].map(k => r.p[3 * i + k] * (1 - a) + r.p[3 * j + k] * a);
+    qa.fromArray(r.q, 4 * i); qb.fromArray(r.q, 4 * j);
+    d.group.quaternion.copy(qa).slerp(qb, a);
+    d.group.position.set(p[0], crashed ? 0.012 * scale : Math.max(p[1], 0.008 * scale), p[2]);
+    d.group.scale.setScalar(scale);
+    d.shadow.position.set(p[0], 0.002, p[2]);
+    d.shadow.scale.setScalar(scale * (1 + p[1] * 0.4));
+    d.shadow.material.opacity = 0.18 / (1 + p[1]);
+    d.trail.geometry.setDrawRange(0, i + 1);
+
+    const faulted = r.faulted[i] === 1;
+    for (let m = 0; m < 4; m++) {
+      const f = r.f[4 * i + m];
+      const isWeak = faulted && m === WEAK;
+      d.pods[m].material.color.setHex(isWeak ? 0xff3b3b : 0x2b333d);
+      if (!crashed && !(ended && t > r.t[d.n - 1] + 0.3)) d.blades[m].rotation.y += d.blades[m].userData.dir * (18 + 50 * f / META.f_max_g) * dtReal * Math.min(speed, 1);
+      const mel = d.motorEls[m];
+      mel.root.classList.toggle("weak", isWeak);
+      mel.fill.style.height = Math.min(100, (f / META.f_max_g) * 100) + "%";
+      mel.value.textContent = f.toFixed(1);
+    }
+    d.fields.tilt.textContent = r.tilt[i].toFixed(0) + "°";
+    d.fields.spin.textContent = Math.abs(r.spin[i]).toFixed(0) + "°/s";
+    d.fields.z.textContent = Math.max(0, p[1]).toFixed(2) + " m";
+    let label = META.modes[r.mode[i]].toUpperCase(), cls = faulted ? "chip fault" : "chip";
+    if (ended) {
+      const out = META.outcomes[d.name];
+      label = crashed ? "CRASHED" : out.startsWith("finished") ? "FINISHED" : "LANDED";
+      cls = crashed ? "chip bad" : "chip good";
+    }
+    d.chip.textContent = label;
+    d.chip.className = cls;
+  });
+  const showBanner = FAULT_T != null && t >= FAULT_T && t < FAULT_T + 3;
+  banner.hidden = !showBanner;
+  if (showBanner) banner.textContent = `Fault: motor M${META.fault_motor} capped at 50% RPM (25% thrust)`;
+  document.getElementById("time").textContent = `${t.toFixed(1)} / ${T_END.toFixed(0)} s`;
+  if (document.activeElement !== scrub) scrub.value = t.toFixed(2);
+
+  if (camSel.value === "follow") {
+    const ours = drones.find(d => d.name === "ours") || drones[0];
+    const delta = ours.group.position.clone().sub(controls.target).multiplyScalar(0.08);
+    controls.target.add(delta);
+    camera.position.add(delta);
+  }
+}
+
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+resize();
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
+  last = now;
+  if (playing) {
+    t += dt * speed;
+    if (t >= T_END) { t = T_END; setPlaying(false); }
+  }
+  update(dt);
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
