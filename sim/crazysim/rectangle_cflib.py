@@ -130,6 +130,12 @@ def hover(cf: Crazyflie, log: FlightLog, args) -> str:
         return "crashed"
     if not args.no_fault:
         inject_fault(cf, log, args)
+        if args.land_on_fault:
+            log.airborne = False
+            hl.land(0.0, args.land_on_fault)
+            time.sleep(args.land_on_fault + 0.5)
+            hl.stop()
+            return "landed after the fault"
     if not wait(log, args.hover / 2):
         return "crashed"
     log.airborne = False
@@ -201,6 +207,7 @@ def main() -> None:
     ap.add_argument("--mass", type=float, help="override the model's mass [kg] (CrazySim: also pass -M)")
     ap.add_argument("--uri", default=URI, help="real drone: radio://0/80/2M/E7E7E7E7E7")
     ap.add_argument("--hover", type=float, metavar="SECONDS", help="hover in place instead of the rectangle")
+    ap.add_argument("--land-on-fault", type=float, metavar="SECONDS", help="with --hover: land right after the fault, taking this long")
     ap.add_argument("--fault-motor", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--fault-cap", type=float, default=0.25, help="thrust left on the faulty motor (default 0.25 = 50%% RPM)")
     ap.add_argument("--fault-delay", type=float, default=LEG_TIME / 2, help="seconds into leg B -> C (default: halfway)")

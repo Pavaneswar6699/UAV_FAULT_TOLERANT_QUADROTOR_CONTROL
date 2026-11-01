@@ -65,8 +65,10 @@ python3 crazysim/rectangle_cflib.py $R --controller stock --hover 5 --no-fault  
 python3 crazysim/rectangle_cflib.py $R --controller ours  --hover 5 --no-fault   # B: our controller hovers
 python3 crazysim/rectangle_cflib.py $R --controller ours  --hover 8 --fault-cap 0.5   # C: mild fault
 python3 crazysim/rectangle_cflib.py $R --controller stock --hover 8 --fault-cap 0.5   # D: stock, same fault
-python3 crazysim/rectangle_cflib.py $R --controller ours  --no-fault                  # E: rectangle
-python3 crazysim/rectangle_cflib.py $R --controller ours  --fault-cap 0.5             # F: rectangle + fault
+python3 crazysim/rectangle_cflib.py $R --controller ours  --hover 4 --fault-cap 0.25 --land-on-fault 1.5   # E: 50% RPM, land
+python3 crazysim/rectangle_cflib.py $R --controller stock --hover 4 --fault-cap 0.25 --land-on-fault 1.5   # F: same, stock
+python3 crazysim/rectangle_cflib.py $R --controller ours  --no-fault                  # G: rectangle
+python3 crazysim/rectangle_cflib.py $R --controller ours  --fault-cap 0.5             # H: rectangle + fault
 ```
 Move to the next stage only when the previous one looks right. If B wobbles or drifts, stop and send
 the log (`sim/results/real_*.csv`). Stage D is expected to crash from 0.5 m.
@@ -80,9 +82,12 @@ the log (`sim/results/real_*.csv`). Stage D is expected to crash from 0.5 m.
 | hover, no fault | hovers (tilt 0.1 deg) | hovers |
 | hover, fault cap 0.5 | stays level (1.3 deg), lands | crashes |
 | hover, fault cap 0.25 (50% RPM) | level for ~2 s, then tips over | crashes |
+| 50% RPM at 0.5 m, land straight away (`--land-on-fault 1.5`) | **level (1 deg), touches down at 0.6 m/s** | falls, hits at 2.2 m/s |
 | rectangle, fault cap 0.5 | passes the health check, then crashes while continuing | crashes |
 
 The firmware rates this drone at 0.12 N per motor. With 50% RPM on one motor that is barely more thrust
-than its weight, so the 50% RPM fault is at the physical limit of a brushed Crazyflie 2.1. These numbers
+than its weight, so the 50% RPM fault is at the physical limit of a brushed Crazyflie 2.1: it can't keep
+flying the path, but it can land safely. To keep flying after a 50% RPM fault, the drone needs more thrust:
+in CrazySim the Crazyflie 2.1 Brushless (`cf21B_500`) finishes the rectangle (`sim/README.md`). These numbers
 assume CrazySim's motor speed (0.13 s) and yaw drag (`--yaw-drag 2e-5`); measure both on the real drone
 and set `indiwls.motorTau` (or `MODELS` in `rectangle_cflib.py`).
