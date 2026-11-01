@@ -83,6 +83,8 @@ the log (`sim/results/real_*.csv`). Stage D is expected to crash from 0.5 m.
 | hover, fault cap 0.5 | stays level (1.3 deg), lands | crashes |
 | hover, fault cap 0.25 (50% RPM) | level for ~2 s, then tips over | crashes |
 | 50% RPM at 0.5 m, land straight away (`--land-on-fault 1.5`) | **level (1 deg), touches down at 0.6 m/s** | falls, hits at 2.2 m/s |
+| motor off (`--fault-cap 0`) at 0.5 m, land straight away | level (5 deg), hits at 1.3 m/s | flips (114 deg), hits at 2.7 m/s |
+| motor off at 1.0 m (`--hover-height 1.0`) | level (11 deg), hits at 1.7 m/s | flips (117 deg), hits at 3.9 m/s |
 | rectangle, fault cap 0.5 | passes the health check, then crashes while continuing | crashes |
 
 The firmware rates this drone at 0.12 N per motor. With 50% RPM on one motor that is barely more thrust

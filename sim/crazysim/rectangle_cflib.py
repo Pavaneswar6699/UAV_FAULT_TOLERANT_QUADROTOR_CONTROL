@@ -32,7 +32,6 @@ MAX_POS_ERR = 0.3                 # [m]
 MAX_TILT_DEG = 20.0
 RESULTS = Path(__file__).resolve().parent.parent / "results"
 STOCK_CONTROLLER = 1             # stabilizer.controller: PID. Ours reports its own id (indiwls.controllerId)
-HOVER_HEIGHT = 0.5               # [m] for --hover
 
 # CrazySim drone models (drone-models params.toml and MJCF files)
 MODELS = {
@@ -123,7 +122,7 @@ def inject_fault(cf: Crazyflie, log: FlightLog, args) -> None:
 def hover(cf: Crazyflie, log: FlightLog, args) -> str:
     """Take off, hover in place, fault halfway if asked, land. For first flights on the real drone."""
     hl = cf.high_level_commander
-    hl.takeoff(HOVER_HEIGHT, 2.0)
+    hl.takeoff(args.hover_height, 2.0)
     time.sleep(3.0)
     log.airborne = True
     if not wait(log, args.hover / 2):
@@ -207,6 +206,7 @@ def main() -> None:
     ap.add_argument("--mass", type=float, help="override the model's mass [kg] (CrazySim: also pass -M)")
     ap.add_argument("--uri", default=URI, help="real drone: radio://0/80/2M/E7E7E7E7E7")
     ap.add_argument("--hover", type=float, metavar="SECONDS", help="hover in place instead of the rectangle")
+    ap.add_argument("--hover-height", type=float, default=0.5, help="[m] for --hover (default 0.5)")
     ap.add_argument("--land-on-fault", type=float, metavar="SECONDS", help="with --hover: land right after the fault, taking this long")
     ap.add_argument("--fault-motor", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--fault-cap", type=float, default=0.25, help="thrust left on the faulty motor (default 0.25 = 50%% RPM)")
