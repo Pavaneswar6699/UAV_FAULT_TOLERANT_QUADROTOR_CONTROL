@@ -28,7 +28,29 @@ Plots and CSV logs go to `results/`. To watch the flight in 3D: `.venv/bin/pytho
 | `allocation.py` | Stock mixer and the WLS allocator |
 | `control.py` | Stock controller and ours (INDI + WLS, fault mode) |
 | `run_sim.py` | Rectangle mission, fault, settle → health check → continue or land, plots |
+| `wind_kf.py` | Linear Kalman filter that estimates the wind from position and velocity |
 | `tests/test_core.py` | Checks the mixer, hover, and the fault split from slide 4 |
+| `tests/test_wind_kf.py` | Checks the wind estimate converges and removes the wind offset |
+
+## Wind estimate (Kalman filter)
+
+State = position, velocity, wind acceleration. It measures position and velocity (from the Crazyflie's
+onboard EKF on the real drone) and uses the motor commands as the known input. On the real system it
+runs on the laptop and its estimate goes into the MPC; here it is added to the position controller.
+
+```bash
+.venv/bin/python run_sim.py --controller ours --wind 2 0             # estimate only
+.venv/bin/python run_sim.py --controller ours --wind 2 0 --wind-ff   # controller leans into it
+```
+
+| 2 m/s wind, fault on M1 | Health check after the fault | Max position error |
+|---|---|---|
+| no wind compensation | PASS, 0.25 m (limit 0.3) | 0.33 m |
+| Kalman estimate fed to the controller | PASS, 0.03 m | 0.12 m |
+
+The estimate reaches the true wind force (20 mN) within about 2 s and stays on it through the fault and
+the spin (`results/wind_estimate.png`). Tuning constants are at the top of `wind_kf.py`; set `POS_STD`
+and `VEL_STD` to the real Loco noise once measured.
 
 ## What the parameters are
 

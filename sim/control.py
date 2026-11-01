@@ -1,5 +1,5 @@
 """Controllers: a stock-style cascade and our fault-tolerant INDI + WLS controller."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -31,11 +31,12 @@ class Reference:
     pos: np.ndarray
     vel: np.ndarray
     yaw: float = 0.0
+    acc: np.ndarray = field(default_factory=lambda: np.zeros(3))   # feed-forward, e.g. minus the wind estimate
 
 
 def thrust_vector(sens: Sensors, ref: Reference, p: QuadParams, max_tilt: float, thrust_max: float):
     """Position PD -> desired thrust direction (world frame) and collective thrust [N]."""
-    a_cmd = KP_POS * (ref.pos - sens.pos) + KD_POS * (ref.vel - sens.vel)
+    a_cmd = KP_POS * (ref.pos - sens.pos) + KD_POS * (ref.vel - sens.vel) + ref.acc
     force = p.mass * (a_cmd + np.array([0.0, 0.0, GRAVITY]))
     fz = max(force[2], 0.3 * p.mass * GRAVITY)
     horiz = force[:2]

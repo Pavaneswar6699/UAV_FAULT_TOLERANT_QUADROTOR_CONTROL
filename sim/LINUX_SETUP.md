@@ -14,7 +14,7 @@ sudo apt update && sudo apt install -y git python3-venv python3-pip python3-tk
 cd ~/UAV_Project/sim
 python3 -m venv .venv
 .venv/bin/pip install numpy scipy matplotlib pytest
-.venv/bin/python -m pytest -q          # expect: 5 passed
+.venv/bin/python -m pytest -q          # expect: 10 passed
 .venv/bin/python run_sim.py            # stock crashes, ours finishes
 .venv/bin/python export_viewer.py && xdg-open results/flight_viewer.html
 ```

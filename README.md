@@ -32,7 +32,7 @@ cd UAV_FAULT_TOLERANT_QUADROTOR_CONTROL/sim
 sudo apt install -y python3-venv python3-tk
 python3 -m venv .venv
 .venv/bin/pip install numpy scipy matplotlib pytest
-.venv/bin/python -m pytest -q           # 5 passed
+.venv/bin/python -m pytest -q           # 10 passed
 .venv/bin/python run_sim.py             # stock controller crashes, ours finishes the rectangle
 .venv/bin/python export_viewer.py && xdg-open results/flight_viewer.html
 ```

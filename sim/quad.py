@@ -11,6 +11,7 @@ import numpy as np
 
 GRAVITY = 9.81
 MOTOR_NAMES = ("M1 front-right", "M2 back-right", "M3 back-left", "M4 front-left")
+NO_WIND = np.zeros(3)
 
 
 @dataclass(frozen=True)
@@ -89,12 +90,14 @@ def hover_state(p: QuadParams, pos) -> State:
                  np.full(4, p.mass * GRAVITY / 4))
 
 
-def step(state: State, f_cmd: np.ndarray, motor_cap: np.ndarray, p: QuadParams, dt: float) -> State:
-    """Advance the physics by dt. motor_cap is each motor's real maximum: the fault is applied here."""
+def step(state: State, f_cmd: np.ndarray, motor_cap: np.ndarray, p: QuadParams, dt: float,
+         wind: np.ndarray = NO_WIND) -> State:
+    """Advance the physics by dt. motor_cap is each motor's real maximum: the fault is applied here.
+    wind is the air velocity [m/s]; drag acts on the velocity relative to the air."""
     target = np.clip(f_cmd, 0.0, motor_cap)
     thrust = state.thrust + (target - state.thrust) * (dt / p.motor_tau)
     wrench = allocation_matrix(p) @ thrust
-    acc = (state.rot @ np.array([0.0, 0.0, wrench[0]]) - p.lin_drag * state.vel) / p.mass
+    acc = (state.rot @ np.array([0.0, 0.0, wrench[0]]) - p.lin_drag * (state.vel - wind)) / p.mass
     acc = acc - np.array([0.0, 0.0, GRAVITY])
     w = state.omega
     drag = np.array([-p.rot_drag_xy * w[0], -p.rot_drag_xy * w[1], -p.yaw_drag * w[2] * abs(w[2])])

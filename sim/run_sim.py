@@ -4,6 +4,8 @@ Examples (from the sim folder):
   .venv/bin/python run_sim.py                    # both controllers, M1 fault midway along B -> C
   .venv/bin/python run_sim.py --no-fault         # baseline flights only
   .venv/bin/python run_sim.py --yaw-drag 2e-6    # test sensitivity to an assumed parameter
+  .venv/bin/python run_sim.py --wind 2 0         # 2 m/s wind east; the Kalman filter estimates it
+  .venv/bin/python run_sim.py --wind 2 0 --wind-ff   # ... and the controller leans into the estimate
 """
 import argparse
 import json
@@ -18,6 +20,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from control import FAULT_CAP, IndiWlsController, Reference, Sensors, StockController  # noqa: E402
 from quad import GRAVITY, MOTOR_NAMES, QuadParams, hover_state, step  # noqa: E402
+from wind_kf import initial_estimate, predict, thrust_acceleration, update  # noqa: E402
 
 PHYSICS_DT = 0.001
 CONTROL_EVERY = 2             # controller runs at 500 Hz
@@ -110,6 +113,8 @@ def simulate(controller_cls, p: QuadParams, args, fault_time):
     log = []
     outcome = "time ran out"
     fault_pos = None
+    wind = np.array([*args.wind, 0.0])
+    est = initial_estimate(state.pos, state.vel)
     for i in range(int(args.duration / PHYSICS_DT)):
         t = i * PHYSICS_DT
         if fault_time is not None and not faulted and t >= fault_time:
@@ -125,11 +130,16 @@ def simulate(controller_cls, p: QuadParams, args, fault_time):
                 rot=state.rot,
                 gyro=np.clip(state.omega + rng.normal(0, GYRO_NOISE, 3), -p.gyro_limit, p.gyro_limit),
             )
+            # Wind KF: last command (clamped at the known caps) over the last period, then the new measurement.
+            u = thrust_acceleration(sens.rot, np.clip(f_cmd, 0.0, cap), p)
+            est = update(predict(est, u, p, PHYSICS_DT * CONTROL_EVERY), sens.pos, sens.vel)
             ref = mission.update(t, PHYSICS_DT * CONTROL_EVERY, state.pos, tilt)
+            if args.wind_ff:
+                ref = replace(ref, acc=-est.wind_acc)
             f_cmd = ctrl(t, sens, ref)
             log.append([t, *state.pos, *ref.pos, tilt, state.omega[2], *state.thrust,
-                        *state.rot.ravel(), MODES.index(mission.mode), float(faulted)])
-        state = step(state, f_cmd, cap, p, PHYSICS_DT)
+                        *state.rot.ravel(), MODES.index(mission.mode), float(faulted), *est.wind_acc])
+        state = step(state, f_cmd, cap, p, PHYSICS_DT, wind)
         if tilt > CRASH_TILT_DEG or (state.pos[2] < LANDED_Z and mission.mode != "land"):
             outcome = "CRASHED (flipped or hit the ground)"
             break
@@ -140,7 +150,7 @@ def simulate(controller_cls, p: QuadParams, args, fault_time):
     return np.array(log), outcome, mission.decision, fault_pos
 
 
-def summarise(name, log, outcome, decision, p):
+def summarise(name, log, outcome, decision, p, wind):
     yaw_peak = np.degrees(np.abs(log[:, 8])).max()
     err = np.linalg.norm(log[:, 1:4] - log[:, 4:7], axis=1)
     print(f"[{name}] {outcome}")
@@ -148,6 +158,11 @@ def summarise(name, log, outcome, decision, p):
         print(f"    health check: {decision}")
     print(f"    max position error {err.max():.2f} m · max tilt {log[:, 7].max():.1f} deg · "
           f"peak spin {yaw_peak:.0f} deg/s (gyro limit {p.gyro_limit_dps:.0f})")
+    if np.any(wind):
+        true_force = p.lin_drag * wind * 1000
+        est_force = p.mass * log[-1, 24:27] * 1000
+        print(f"    wind force [mN] true ({true_force[0]:.1f}, {true_force[1]:.1f}) · "
+              f"Kalman estimate at the end ({est_force[0]:.1f}, {est_force[1]:.1f})")
 
 
 def plot(results, args, fault_time, p):
@@ -195,9 +210,26 @@ def plot(results, args, fault_time, p):
         ax.legend(fontsize=8, ncol=5)
         fig2.tight_layout()
         fig2.savefig(RESULTS / "motors_ours.png", dpi=120)
+    if np.any(args.wind):
+        plot_wind(results, args, fault_time, p)
     for name, (log, *_rest) in results.items():
         np.savetxt(RESULTS / f"log_{name}.csv", log, delimiter=",", fmt="%.5f",
-                   header="t,x,y,z,x_ref,y_ref,z_ref,tilt_deg,yaw_rate,f1,f2,f3,f4,r00,r01,r02,r10,r11,r12,r20,r21,r22,mode,faulted")
+                   header="t,x,y,z,x_ref,y_ref,z_ref,tilt_deg,yaw_rate,f1,f2,f3,f4,r00,r01,r02,r10,r11,r12,r20,r21,r22,mode,faulted,wind_acc_x,wind_acc_y,wind_acc_z")
+
+
+def plot_wind(results, args, fault_time, p):
+    fig, axes = plt.subplots(1, 2, figsize=(12, 3.8), sharey=True)
+    for k, ax in enumerate(axes):
+        ax.axhline(p.lin_drag * args.wind[k] * 1000, color="k", ls="--", lw=1, label="true")
+        for name, (log, *_rest) in results.items():
+            ax.plot(log[:, 0], p.mass * log[:, 24 + k] * 1000, label=f"{name}: Kalman estimate")
+        if fault_time is not None:
+            ax.axvline(fault_time, color="tab:red", lw=1, ls=":", label="fault")
+        ax.set(title=f"Wind force, {'xy'[k]} axis", xlabel="time [s]", ylabel="mN")
+        ax.grid(alpha=0.3)
+    axes[0].legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(RESULTS / "wind_estimate.png", dpi=120)
 
 
 def main():
@@ -211,6 +243,9 @@ def main():
     ap.add_argument("--duration", type=float, default=60.0)
     ap.add_argument("--yaw-drag", type=float, help="override assumed yaw damping")
     ap.add_argument("--motor-tau", type=float, help="override assumed motor time constant [s]")
+    ap.add_argument("--wind", type=float, nargs=2, default=[0.0, 0.0], metavar=("WX", "WY"),
+                    help="steady wind [m/s] east and north")
+    ap.add_argument("--wind-ff", action="store_true", help="feed the Kalman wind estimate to the controller")
     args = ap.parse_args()
 
     p = QuadParams()
@@ -228,7 +263,7 @@ def main():
     for name in names:
         log, outcome, decision, fault_pos = simulate(controllers[name], p, args, fault_time)
         results[name] = (log, outcome, decision, fault_pos)
-        summarise(name, log, outcome, decision, p)
+        summarise(name, log, outcome, decision, p, np.array(args.wind))
     plot(results, args, fault_time, p)
     meta = {
         "side": args.side, "fault_motor": args.fault_motor, "fault_time": fault_time, "modes": MODES,
