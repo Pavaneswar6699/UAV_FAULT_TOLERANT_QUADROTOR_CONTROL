@@ -33,12 +33,29 @@ python3 -m venv ~/cfenv && source ~/cfenv/bin/activate
 pip install Jinja2 mujoco numpy
 
 cd ~/CrazySim/crazyflie-firmware
-git submodule update --init tools/crazyflie-simulation/simulator_files/mujoco/drone-models
+git apply ~/UAV_FAULT_TOLERANT_QUADROTOR_CONTROL/sim/crazysim/firmware.patch
+git -C tools/crazyflie-simulation apply ~/UAV_FAULT_TOLERANT_QUADROTOR_CONTROL/sim/crazysim/simulator.patch
 mkdir -p sitl_make/build && cd sitl_make/build
 cmake .. && make all
 cd ~/CrazySim/crazyflie-firmware
 bash tools/crazyflie-simulation/simulator_files/mujoco/launch/sitl_singleagent.sh -m cf2x_L250 -x 0 -y 0
 ```
+`firmware.patch`:
+- **Fixes a hang.** Without it the firmware can stop at `STAB: Wait for sensor calibration...` and cflib
+  never connects: `lastWakeTime` is `uint32_t` but the Linux FreeRTOS tick is 64-bit, so the stabilizer
+  never sleeps and starves every other task.
+- **Adds the fault switch** for milestone 4: parameters `fault.motor` (0 off, 1-4) and `fault.cap`
+  (thrust left, default 0.25), and the log group `fault.m1`-`fault.m4` (PWM actually sent to the motors).
+- **Builds our controller in** (`../firmware/*.c`, from this repo's folder in your home directory; set
+  `cmake -DINDI_WLS_DIR=...` if the repo is elsewhere) as controller 5, and lets the firmware send
+  per-motor forces to CrazySim.
+
+`simulator.patch` adds `--yaw-drag <k>` to CrazySim: air drag against spinning, which CrazySim leaves
+out. Without it a drone that loses a motor spins faster and faster until the gyro saturates.
+
+`make all` also prints a `gz-plugin` CMake error: that's the Gazebo version of CrazySim, ignore it.
+The firmware is built once `Built target cf2` appears.
+
 Models: `cf2x_L250` = standard Crazyflie 2.x, `cf2x_T350` = thrust upgrade kit, `cf21B_500` = 2.1 Brushless.
 Pick the one matching the drone the lab gives you.
 
@@ -49,10 +66,27 @@ In a second terminal:
 source ~/cfenv/bin/activate
 cd ~ && git clone https://github.com/bitcraze/crazyflie-lib-python.git
 cd crazyflie-lib-python && pip install -e .
-cd ~/UAV_Project/sim && python3 crazysim/rectangle_cflib.py
+cd ~/UAV_FAULT_TOLERANT_QUADROTOR_CONTROL/sim && python3 crazysim/rectangle_cflib.py --controller stock --no-fault
 ```
 The drone in the MuJoCo window should take off, fly A → B → C → D → A and land. That's your
 **baseline flight** (D2, D3) running on the real firmware.
+
+Without `--no-fault` the script caps M1 at 25% thrust midway along B → C (`--fault-motor`,
+`--fault-cap`, `--fault-delay` change that), then holds position for 2.5 s and runs the same health
+check as `run_sim.py`: continue at half speed, or land where it is. Each run saves a 50 Hz log in
+`results/crazysim_*.csv`. After a crash, restart CrazySim (Ctrl+C in its terminal, launch again).
+
+**Our controller vs the stock one, with the fault.** Start CrazySim with a drone that has the thrust
+to survive it and with yaw drag:
+```bash
+# terminal 1
+bash tools/crazyflie-simulation/simulator_files/mujoco/launch/sitl_singleagent.sh -m cf21B_500 -x 0 -y 0 --yaw-drag 2e-5
+# terminal 2
+python3 crazysim/rectangle_cflib.py --model cf21B_500 --controller ours
+python3 crazysim/rectangle_cflib.py --model cf21B_500 --controller stock   # restart CrazySim first
+```
+`--model` must match `-m`: the script sets our controller's mass, motor strength and motor speed from
+it. Results for every model are in `README.md`.
 
 If it complains about the URI or arming, check CrazySim's README: it changes faster than this file.
 
@@ -64,6 +98,6 @@ If it complains about the URI or arming, check CrazySim's README: it changes fas
 | 2 | CrazySim drone hovers from cflib | — |
 | 3 | Rectangle flown in CrazySim with the stock controller | D2, D3 (in simulation) |
 | 4 | Firmware fault switch: a parameter that caps motor k at 50% RPM; watch the stock controller crash | D4 |
-| 5 | Our controller (INDI + WLS) as a firmware app; fault flight in CrazySim | D5, D6 |
+| 5 | Our controller (INDI + WLS) in the firmware; fault flight in CrazySim | D5, D6 |
 
-Steps 4 and 5 are firmware work (C). Ask for help when you reach them.
+Milestones 1-5 run in simulation. Next: the same flights on the real drone.

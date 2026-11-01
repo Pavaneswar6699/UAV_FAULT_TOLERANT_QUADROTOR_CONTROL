@@ -1,0 +1,107 @@
+diff --git a/sitl_make/CMakeLists.txt b/sitl_make/CMakeLists.txt
+index 834317c6..dd1099b2 100644
+--- a/sitl_make/CMakeLists.txt
++++ b/sitl_make/CMakeLists.txt
+@@ -246,6 +246,12 @@ add_executable(cf2 ${SRCS})
+ 
+ target_link_libraries(cf2 ${CMAKE_THREAD_LIBS_INIT} m)
+ 
++# Fault-tolerant INDI + WLS controller in the out-of-tree controller slot (stabilizer.controller = 5)
++set(INDI_WLS_DIR "$ENV{HOME}/UAV_FAULT_TOLERANT_QUADROTOR_CONTROL/firmware" CACHE PATH "folder with indi_wls.c and controller_oot.c")
++target_sources(cf2 PRIVATE ${INDI_WLS_DIR}/indi_wls.c ${INDI_WLS_DIR}/controller_oot.c)
++target_include_directories(cf2 PRIVATE ${INDI_WLS_DIR})
++target_compile_definitions(cf2 PUBLIC CONFIG_CONTROLLER_OOT)
++
+ target_compile_options(cf2 PUBLIC -DCONFIG_DECK_FORCE -DCONFIG_ESTIMATOR_KALMAN_ENABLE -DCONFIG_ESTIMATOR_UKF_ENABLE -DCRAZYFLIE_FW -DCONFIG_PLATFORM_SITL -DARCH_64)
+ target_compile_definitions(cf2 PUBLIC CONFIG_PLATFORM_SITL)
+ 
+diff --git a/src/modules/src/power_distribution_sitl.c b/src/modules/src/power_distribution_sitl.c
+index f9fe7e88..413c7744 100644
+--- a/src/modules/src/power_distribution_sitl.c
++++ b/src/modules/src/power_distribution_sitl.c
+@@ -138,7 +138,10 @@ static void powerDistributionForceTorque(const control_t *control, motors_thrust
+ }
+ 
+ static void powerDistributionForce(const control_t *control, motors_thrust_uncapped_t* motorThrustUncapped) {
+-  // Not implemented yet
++  // CrazySim maps PWM linearly to thrust (pwm / 65535 * thrust_max), so the normalized force is the PWM ratio
++  for (int motorIndex = 0; motorIndex < STABILIZER_NR_OF_MOTORS; motorIndex++) {
++    motorThrustUncapped->list[motorIndex] = control->normalizedForces[motorIndex] * UINT16_MAX;
++  }
+ }
+ 
+ void powerDistribution(const control_t *control, motors_thrust_uncapped_t* motorThrustUncapped)
+diff --git a/src/modules/src/stabilizer.c b/src/modules/src/stabilizer.c
+index 23a38a8e..02becc7e 100644
+--- a/src/modules/src/stabilizer.c
++++ b/src/modules/src/stabilizer.c
+@@ -256,6 +256,21 @@ static void logCapWarning(const bool isCapped) {
+   #endif
+ }
+ 
++// Fault injection for testing: caps one motor's PWM, like a damaged propeller.
++// fault.motor: 0 = off, 1-4 = M1-M4. fault.cap: fraction of full thrust (50% RPM leaves 25% thrust).
++static uint8_t faultMotor = 0;
++static float faultCap = 0.25f;
++
++static void applyMotorFault(motors_thrust_pwm_t* pwm) {
++  if (faultMotor < 1 || faultMotor > STABILIZER_NR_OF_MOTORS) {
++    return;
++  }
++  const float cap = fminf(fmaxf(faultCap, 0.0f), 1.0f) * UINT16_MAX;
++  if (pwm->list[faultMotor - 1] > cap) {
++    pwm->list[faultMotor - 1] = (uint16_t)cap;
++  }
++}
++
+ static void controlMotors(const control_t* control) {
+   powerDistribution(control, &motorThrustUncapped);
+   #ifndef CONFIG_PLATFORM_SITL
+@@ -265,6 +280,7 @@ static void controlMotors(const control_t* control) {
+   const bool isCapped = powerDistributionCap(&motorThrustUncapped, &motorPwm);
+   #endif
+   logCapWarning(isCapped);
++  applyMotorFault(&motorPwm);
+   setMotorRatios(&motorPwm);
+ }
+ 
+@@ -275,7 +291,7 @@ static void controlMotors(const control_t* control) {
+ static void stabilizerTask(void* param)
+ {
+   stabilizerStep_t stabilizerStep;
+-  uint32_t lastWakeTime;
++  TickType_t lastWakeTime;
+   vTaskSetApplicationTaskTag(0, (void*)TASK_STABILIZER_ID_NBR);
+ 
+   //Wait for the system to be fully started to start stabilization loop
+@@ -400,6 +416,30 @@ PARAM_ADD_CORE(PARAM_UINT8, estimator, &estimatorType)
+ PARAM_ADD_CORE(PARAM_UINT8, controller, &controllerType)
+ PARAM_GROUP_STOP(stabilizer)
+ 
++/**
++ * Motor fault injection (testing only)
++ */
++PARAM_GROUP_START(fault)
++/**
++ * @brief Faulty motor: off(0), M1(1) .. M4(4) (Default: 0)
++ */
++PARAM_ADD(PARAM_UINT8, motor, &faultMotor)
++/**
++ * @brief Thrust cap of the faulty motor as a fraction of full thrust (Default: 0.25)
++ */
++PARAM_ADD(PARAM_FLOAT, cap, &faultCap)
++PARAM_GROUP_STOP(fault)
++
++/**
++ * Motor PWM actually sent to the motors, after fault injection
++ */
++LOG_GROUP_START(fault)
++LOG_ADD(LOG_UINT16, m1, &motorPwm.motors.m1)
++LOG_ADD(LOG_UINT16, m2, &motorPwm.motors.m2)
++LOG_ADD(LOG_UINT16, m3, &motorPwm.motors.m3)
++LOG_ADD(LOG_UINT16, m4, &motorPwm.motors.m4)
++LOG_GROUP_STOP(fault)
++
+ 
+ /**
+  * Log group for the current controller target
