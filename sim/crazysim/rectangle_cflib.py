@@ -1,10 +1,12 @@
-"""Fly the demo rectangle on a simulated Crazyflie in CrazySim, with a mid-path motor fault.
+"""Fly the demo rectangle with a mid-path motor fault, in CrazySim or on the real Crazyflie.
 
 Start CrazySim first (see LINUX_SETUP.md), then:
   python3 crazysim/rectangle_cflib.py --controller ours     # our INDI + WLS controller
   python3 crazysim/rectangle_cflib.py --controller stock    # the firmware's PID controller
   python3 crazysim/rectangle_cflib.py --no-fault            # baseline flight
+  python3 crazysim/rectangle_cflib.py --hover 5             # hover 5 s instead of the rectangle
 --model must match the -m given to the CrazySim launch script (default cf2x_L250).
+Real drone: --uri radio://0/80/2M/E7E7E7E7E7 --model cf2x_P250 --mass <measured kg> (firmware/README.md).
 Needs the patched firmware (crazysim/firmware.patch). Restart CrazySim after a crash.
 """
 import argparse
@@ -29,7 +31,8 @@ CHECK_WINDOW_S = 1.0
 MAX_POS_ERR = 0.3                 # [m]
 MAX_TILT_DEG = 20.0
 RESULTS = Path(__file__).resolve().parent.parent / "results"
-CONTROLLERS = {"stock": 1, "ours": 5}   # stabilizer.controller: PID, out-of-tree (firmware/controller_oot.c)
+STOCK_CONTROLLER = 1             # stabilizer.controller: PID. Ours reports its own id (indiwls.controllerId)
+HOVER_HEIGHT = 0.5               # [m] for --hover
 
 # CrazySim drone models (drone-models params.toml and MJCF files)
 MODELS = {
@@ -109,6 +112,33 @@ def health_check(log: FlightLog, hold) -> tuple[bool, str]:
     return passed, f"{'PASS' if passed else 'FAIL'} (pos err {worst_err:.2f} m, tilt {worst_tilt:.1f} deg)"
 
 
+def inject_fault(cf: Crazyflie, log: FlightLog, args) -> None:
+    cf.param.set_value("fault.motor", str(args.fault_motor))
+    if args.controller == "ours":
+        cf.param.set_value("indiwls.faultMotor", str(args.fault_motor))   # notify_fault()
+    log.fault_on = True
+    print(f"FAULT: M{args.fault_motor} capped at {args.fault_cap:.0%} thrust")
+
+
+def hover(cf: Crazyflie, log: FlightLog, args) -> str:
+    """Take off, hover in place, fault halfway if asked, land. For first flights on the real drone."""
+    hl = cf.high_level_commander
+    hl.takeoff(HOVER_HEIGHT, 2.0)
+    time.sleep(3.0)
+    log.airborne = True
+    if not wait(log, args.hover / 2):
+        return "crashed"
+    if not args.no_fault:
+        inject_fault(cf, log, args)
+    if not wait(log, args.hover / 2):
+        return "crashed"
+    log.airborne = False
+    hl.land(0.0, 3.0)
+    time.sleep(3.5)
+    hl.stop()
+    return "hovered and landed"
+
+
 def fly(cf: Crazyflie, log: FlightLog, args) -> str:
     hl = cf.high_level_commander
     hl.takeoff(HEIGHT, 2.0)
@@ -124,11 +154,7 @@ def fly(cf: Crazyflie, log: FlightLog, args) -> str:
         # Leg B -> C: the fault, then settle -> health check -> continue at half speed or land
         if not wait(log, args.fault_delay):
             return "crashed"
-        cf.param.set_value("fault.motor", str(args.fault_motor))
-        if args.controller == "ours":
-            cf.param.set_value("indiwls.faultMotor", str(args.fault_motor))   # notify_fault()
-        log.fault_on = True
-        print(f"FAULT: M{args.fault_motor} capped at {args.fault_cap:.0%} thrust")
+        inject_fault(cf, log, args)
         hold = (*log.position()[:2], HEIGHT)
         hl.go_to(*hold, 0.0, 1.0)
         if not wait(log, SETTLE_S):
@@ -170,8 +196,11 @@ def summary(log: FlightLog, outcome: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--controller", choices=list(CONTROLLERS), default="ours")
+    ap.add_argument("--controller", choices=["stock", "ours"], default="ours")
     ap.add_argument("--model", choices=list(MODELS), default="cf2x_L250", help="same as CrazySim's -m")
+    ap.add_argument("--mass", type=float, help="override the model's mass [kg] (CrazySim: also pass -M)")
+    ap.add_argument("--uri", default=URI, help="real drone: radio://0/80/2M/E7E7E7E7E7")
+    ap.add_argument("--hover", type=float, metavar="SECONDS", help="hover in place instead of the rectangle")
     ap.add_argument("--fault-motor", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--fault-cap", type=float, default=0.25, help="thrust left on the faulty motor (default 0.25 = 50%% RPM)")
     ap.add_argument("--fault-delay", type=float, default=LEG_TIME / 2, help="seconds into leg B -> C (default: halfway)")
@@ -179,21 +208,28 @@ def main() -> None:
     args = ap.parse_args()
 
     cflib.crtp.init_drivers()
-    with SyncCrazyflie(URI, cf=Crazyflie(rw_cache="./cache")) as scf:
+    model = dict(MODELS[args.model], **({"mass": args.mass} if args.mass else {}))
+    with SyncCrazyflie(args.uri, cf=Crazyflie(rw_cache="./cache")) as scf:
         cf = scf.cf
         cf.param.set_value("fault.motor", "0")
         cf.param.set_value("fault.cap", str(args.fault_cap))
         cf.param.set_value("indiwls.faultMotor", "0")
         cf.param.set_value("indiwls.faultCap", str(args.fault_cap))
-        for name, value in MODELS[args.model].items():
+        for name, value in model.items():
             cf.param.set_value(f"indiwls.{name}", str(value))
-        cf.param.set_value("stabilizer.controller", str(CONTROLLERS[args.controller]))
-        print(f"controller: {args.controller} · model: {args.model}")
+        ours = int(cf.param.get_value("indiwls.controllerId"))
+        cf.param.set_value("stabilizer.controller", str(ours if args.controller == "ours" else STOCK_CONTROLLER))
+        print(f"controller: {args.controller} · model: {args.model} · mass {model['mass'] * 1000:.1f} g")
         log = FlightLog()
         log.start(cf)
         cf.supervisor.send_arming_request(True)   # recent firmware needs arming before flight
         time.sleep(1.0)
-        outcome = fly(cf, log, args)
+        try:
+            outcome = hover(cf, log, args) if args.hover else fly(cf, log, args)
+        except KeyboardInterrupt:              # Ctrl+C: motors off now
+            cf.high_level_commander.stop()
+            print("STOPPED by Ctrl+C: motors off")
+            outcome = "stopped"
         if outcome == "crashed":
             time.sleep(2.0)                        # record the fall
             cf.high_level_commander.stop()
@@ -201,7 +237,8 @@ def main() -> None:
         cf.param.set_value("indiwls.faultMotor", "0")
 
     fault = "nofault" if args.no_fault else f"fault_m{args.fault_motor}"
-    path = RESULTS / f"crazysim_{args.controller}_{args.model}_{fault}.csv"
+    where = "crazysim" if args.uri.startswith("udp://") else "real"
+    path = RESULTS / f"{where}_{args.controller}_{args.model}_{'hover_' if args.hover else ''}{fault}.csv"
     log.save(path)
     summary(log, outcome)
     print(f"log saved in {path}")

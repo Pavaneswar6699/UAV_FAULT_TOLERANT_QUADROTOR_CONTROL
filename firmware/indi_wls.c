@@ -302,7 +302,8 @@ void indiWlsAllocate(const IndiWlsParams* p, const float wrench[4], const float 
   float best[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   float bestCost = INFINITY;
   const float tol = 1e-6f;
-  for (int pattern = 0; pattern < 81; pattern++) {
+  // Start with all motors free (pattern 80): in normal flight that one fits and the search ends there.
+  for (int pattern = 80; pattern >= 0; pattern--) {
     // Each motor: 0 = at lower bound, 1 = at upper bound, 2 = free
     int code = pattern;
     int kind[4];
@@ -346,6 +347,9 @@ void indiWlsAllocate(const IndiWlsParams* p, const float wrench[4], const float 
     if (cost < bestCost) {
       bestCost = cost;
       memcpy(best, x, sizeof(best));
+    }
+    if (n == 4) {
+      break;   // the unconstrained optimum is within bounds, so it is the optimum
     }
   }
   for (int i = 0; i < 4; i++) {

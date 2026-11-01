@@ -104,4 +104,4 @@ If it complains about the URI or arming, check CrazySim's README: it changes fas
 | 4 | Firmware fault switch: a parameter that caps motor k at 50% RPM; watch the stock controller crash | D4 |
 | 5 | Our controller (INDI + WLS) in the firmware; fault flight in CrazySim | D5, D6 |
 
-Milestones 1-5 run in simulation. Next: the same flights on the real drone.
+Milestones 1-5 run in simulation. On the real drone: [`../firmware/README.md`](../firmware/README.md).

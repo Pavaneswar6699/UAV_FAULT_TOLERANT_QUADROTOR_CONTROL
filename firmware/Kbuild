@@ -1,0 +1,2 @@
+obj-y += indi_wls.o
+obj-y += controller_oot.o

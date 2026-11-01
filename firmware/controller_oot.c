@@ -1,8 +1,10 @@
-/* Crazyflie out-of-tree controller slot (stabilizer.controller = 5) running indi_wls.c.
+/* Crazyflie out-of-tree controller slot running indi_wls.c, in CrazySim and on the real drone.
  *
- * Runs at 500 Hz like the Python sim and sends per-motor forces (controlModeForce).
- * The drone's parameters are firmware parameters (group indiwls) so one build fits every model;
- * crazysim/rectangle_cflib.py sets them for the model CrazySim was started with.
+ * Select it with stabilizer.controller = indiwls.controllerId (5 in CrazySim's firmware, 6 in 2026.08).
+ * Runs at 500 Hz like the Python sim and sends per-motor forces (controlModeForce) as a fraction of fMax:
+ * in CrazySim that fraction is the PWM; on the real drone the firmware turns it into PWM with its
+ * battery-compensated thrust curve, whose full scale is THRUST_MAX, so fMax must stay THRUST_MAX there.
+ * The drone's parameters are firmware parameters (group indiwls); sim/crazysim/rectangle_cflib.py sets them.
  * The fault message is indiwls.faultMotor (0 = none, 1-4), the firmware version of notify_fault().
  */
 #include <math.h>
@@ -13,6 +15,12 @@
 
 #include "indi_wls.h"
 
+#ifndef CONFIG_PLATFORM_SITL
+#include "FreeRTOS.h"
+#include "task.h"
+#include "platform_defaults.h"
+#endif
+
 #define DEG_TO_RAD (3.14159265f / 180.0f)
 #define CONTROL_HZ RATE_500_HZ
 
@@ -20,6 +28,25 @@ static IndiWlsParams params = INDI_WLS_DEFAULT_PARAMS;
 static IndiWlsState state;
 static uint8_t faultMotor = 0;     // parameter: what the controller has been told
 static float forces[4];            // last command [N], for the log
+static uint8_t controllerId = ControllerTypeOot;
+
+#ifndef CONFIG_PLATFORM_SITL
+// The app layer needs an appMain. It runs once at boot, before any client can set parameters:
+// start from this drone's constants (Crazyflie 2.1 with 2.1+ propellers, as CrazySim's cf2x_P250).
+void appMain(void) {
+  params.mass = CF_MASS;
+  params.fMax = THRUST_MAX;
+  params.armD = ARM_LENGTH * 0.70710678f;
+  params.kappa = THRUST2TORQUE;
+  params.inertia[0] = 1.68e-5f;
+  params.inertia[1] = 1.68e-5f;
+  params.inertia[2] = 2.98e-5f;
+  params.motorTau = 0.13f;   // drone-models identification; measure it
+  while (1) {
+    vTaskDelay(M2T(2000));
+  }
+}
+#endif
 
 void controllerOutOfTreeInit(void) {
   // Called when stabilizer.controller switches to us: keep the parameters already set
@@ -92,6 +119,10 @@ void controllerOutOfTree(control_t* control, const setpoint_t* setpoint, const s
  * Fault-tolerant INDI + WLS controller (firmware/indi_wls.c)
  */
 PARAM_GROUP_START(indiwls)
+/**
+ * @brief Value of stabilizer.controller that selects this controller
+ */
+PARAM_ADD(PARAM_UINT8 | PARAM_RONLY, controllerId, &controllerId)
 /**
  * @brief Faulty motor the controller has been told about: none(0), M1(1) .. M4(4)
  */

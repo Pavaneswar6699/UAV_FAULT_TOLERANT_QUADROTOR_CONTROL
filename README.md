@@ -23,7 +23,7 @@ is below the 4:1 needed to stay level *and* hold heading. So after the fault we 
 | `Fault-Tolerant Quadrotor Control — Project Presentation.pptx`, `Team_LUGER_Presentation_Script.pdf` | Earlier PX4-based version (superseded) |
 | `sim/` | Python simulator, 3D flight viewer, tests, learning guide |
 | `sim/crazysim/` | Scripts and patches for CrazySim (the real Crazyflie firmware in simulation) |
-| `firmware/` | Our controller (INDI + WLS) in C, built into the Crazyflie firmware |
+| `firmware/` | Our controller (INDI + WLS) in C, and how to flash and test it on the drone |
 
 ## Quick start (Ubuntu)
 
