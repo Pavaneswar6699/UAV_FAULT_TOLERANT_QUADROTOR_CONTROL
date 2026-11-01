@@ -50,8 +50,12 @@ bash tools/crazyflie-simulation/simulator_files/mujoco/launch/sitl_singleagent.s
   `cmake -DINDI_WLS_DIR=...` if the repo is elsewhere) as controller 5, and lets the firmware send
   per-motor forces to CrazySim.
 
-`simulator.patch` adds `--yaw-drag <k>` to CrazySim: air drag against spinning, which CrazySim leaves
-out. Without it a drone that loses a motor spins faster and faster until the gyro saturates.
+`simulator.patch`:
+- adds `--yaw-drag <k>`: air drag against spinning, which CrazySim leaves out. Without it a drone that
+  loses a motor spins faster and faster until the gyro saturates.
+- keeps the simulation at real time (RTF 1.00 in the bottom-right corner of the 3D window). The firmware
+  and the flight script run on the wall clock, so a slower simulation flies the path faster than
+  planned and shortens the hold after the fault: at RTF 0.8 our controller failed the health check.
 
 `make all` also prints a `gz-plugin` CMake error: that's the Gazebo version of CrazySim, ignore it.
 The firmware is built once `Built target cf2` appears.

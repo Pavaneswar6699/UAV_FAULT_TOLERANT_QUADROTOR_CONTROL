@@ -1,5 +1,5 @@
 diff --git a/simulator_files/mujoco/crazysim.py b/simulator_files/mujoco/crazysim.py
-index d4a7eb9..3d5c2ae 100644
+index d4a7eb9..942453d 100644
 --- a/simulator_files/mujoco/crazysim.py
 +++ b/simulator_files/mujoco/crazysim.py
 @@ -668,7 +668,8 @@ class DroneAgent:
@@ -45,7 +45,52 @@ index d4a7eb9..3d5c2ae 100644
              )
              self.agents.append(agent)
  
-@@ -1466,6 +1472,8 @@ def main():
+@@ -1324,6 +1330,20 @@ class CrazySimMuJoCo:
+         _rtf_sim_start = self.data.time
+         _rtf_value = 0.0
+ 
++        # Pace against the wall clock, not per step: a slow step (e.g. a rendered frame) is made up
++        # over the next steps, so the sim stays at real time like the firmware it talks to.
++        _pace_wall = time.perf_counter()
++        _pace_sim = self.data.time
++
++        def _keep_real_time():
++            nonlocal _pace_wall, _pace_sim
++            ahead = (self.data.time - _pace_sim) - (time.perf_counter() - _pace_wall)
++            if ahead > 0:
++                time.sleep(ahead)
++            elif ahead < -0.1:   # can't keep up: don't try to catch up in a burst
++                _pace_wall = time.perf_counter()
++                _pace_sim = self.data.time
++
+         def _update_rtf():
+             nonlocal _rtf_wall_start, _rtf_sim_start, _rtf_value
+             wall_now = time.perf_counter()
+@@ -1363,21 +1383,14 @@ class CrazySimMuJoCo:
+                         ))
+                         v.sync()
+                         _last_render = t0
+-                    elapsed = time.perf_counter() - t0
+-                    sleep_t = self.dt - elapsed
+-                    if sleep_t > 0:
+-                        time.sleep(sleep_t)
++                    _keep_real_time()
+             self._running = False
+         else:
+             try:
+                 while self._running:
+-                    t0 = time.perf_counter()
+                     _step_and_send()
+                     _update_rtf()
+-                    elapsed = time.perf_counter() - t0
+-                    sleep_t = self.dt - elapsed
+-                    if sleep_t > 0:
+-                        time.sleep(sleep_t)
++                    _keep_real_time()
+             except KeyboardInterrupt:
+                 pass
+ 
+@@ -1466,6 +1479,8 @@ def main():
                     help='Simulate flowdeck (TOF + optical flow, disables pose)')
      p.add_argument('--ground-effect', action='store_true',
                     help='Enable Cheeseman-Bennett ground effect model')
@@ -54,7 +99,7 @@ index d4a7eb9..3d5c2ae 100644
      p.add_argument('--downwash', action='store_true',
                     help='Enable inter-drone downwash interaction')
      p.add_argument('--camera', action='store_true',
-@@ -1543,6 +1551,7 @@ def main():
+@@ -1543,6 +1558,7 @@ def main():
          wind_model=wind_model,
          ground_effect=args.ground_effect,
          flowdeck=args.flowdeck,
