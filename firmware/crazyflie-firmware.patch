@@ -1,0 +1,61 @@
+diff --git a/src/modules/src/stabilizer.c b/src/modules/src/stabilizer.c
+index 3b265e7..d2a044b 100644
+--- a/src/modules/src/stabilizer.c
++++ b/src/modules/src/stabilizer.c
+@@ -252,8 +252,25 @@ static void logCapWarning(const bool isCapped) {
+   #endif
+ }
+ 
++// Fault injection for testing: caps one motor's thrust, like a damaged propeller. Applied before
++// battery compensation, so the cap is a thrust (fraction of THRUST_MAX) whatever the battery level.
++// fault.motor: 0 = off, 1-4 = M1-M4. fault.cap: fraction of full thrust (50% RPM leaves 25% thrust).
++static uint8_t faultMotor = 0;
++static float faultCap = 0.25f;
++
++static void applyMotorFault(motors_thrust_uncapped_t* thrust) {
++  if (faultMotor < 1 || faultMotor > STABILIZER_NR_OF_MOTORS) {
++    return;
++  }
++  const int32_t cap = fminf(fmaxf(faultCap, 0.0f), 1.0f) * UINT16_MAX;
++  if (thrust->list[faultMotor - 1] > cap) {
++    thrust->list[faultMotor - 1] = cap;
++  }
++}
++
+ static void controlMotors(const control_t* control) {
+   powerDistribution(control, &motorThrustUncapped);
++  applyMotorFault(&motorThrustUncapped);
+   batteryCompensation(&motorThrustUncapped, &motorThrustBatCompUncapped);
+   const bool isCapped = powerDistributionCap(&motorThrustBatCompUncapped, &motorPwm);
+   logCapWarning(isCapped);
+@@ -405,6 +422,30 @@ PARAM_ADD_CORE(PARAM_UINT8, controller, &controllerType)
+ 
+ PARAM_GROUP_STOP(stabilizer)
+ 
++/**
++ * Motor fault injection (testing only)
++ */
++PARAM_GROUP_START(fault)
++/**
++ * @brief Faulty motor: off(0), M1(1) .. M4(4) (Default: 0)
++ */
++PARAM_ADD(PARAM_UINT8, motor, &faultMotor)
++/**
++ * @brief Thrust cap of the faulty motor as a fraction of full thrust (Default: 0.25)
++ */
++PARAM_ADD(PARAM_FLOAT, cap, &faultCap)
++PARAM_GROUP_STOP(fault)
++
++/**
++ * Motor PWM actually sent to the motors, after fault injection and battery compensation
++ */
++LOG_GROUP_START(fault)
++LOG_ADD(LOG_UINT16, m1, &motorPwm.motors.m1)
++LOG_ADD(LOG_UINT16, m2, &motorPwm.motors.m2)
++LOG_ADD(LOG_UINT16, m3, &motorPwm.motors.m3)
++LOG_ADD(LOG_UINT16, m4, &motorPwm.motors.m4)
++LOG_GROUP_STOP(fault)
++
+ 
+ /**
+  * Log group for the current controller target

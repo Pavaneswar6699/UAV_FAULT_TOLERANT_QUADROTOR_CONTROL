@@ -22,7 +22,8 @@ is below the 4:1 needed to stay level *and* hold heading. So after the fault we 
 | `WhatsApp Image …jpeg` | The project brief and general expectations |
 | `Fault-Tolerant Quadrotor Control — Project Presentation.pptx`, `Team_LUGER_Presentation_Script.pdf` | Earlier PX4-based version (superseded) |
 | `sim/` | Python simulator, 3D flight viewer, tests, learning guide |
-| `sim/crazysim/` | Scripts for CrazySim (the real Crazyflie firmware in simulation) |
+| `sim/crazysim/` | Scripts and patches for CrazySim (the real Crazyflie firmware in simulation) |
+| `firmware/` | Our controller (INDI + WLS) in C, and how to flash and test it on the drone |
 
 ## Quick start (Ubuntu)
 
@@ -32,7 +33,7 @@ cd UAV_FAULT_TOLERANT_QUADROTOR_CONTROL/sim
 sudo apt install -y python3-venv python3-tk
 python3 -m venv .venv
 .venv/bin/pip install numpy scipy matplotlib pytest
-.venv/bin/python -m pytest -q           # 10 passed
+.venv/bin/python -m pytest -q           # 13 passed (3 need gcc)
 .venv/bin/python run_sim.py             # stock controller crashes, ours finishes the rectangle
 .venv/bin/python export_viewer.py && xdg-open results/flight_viewer.html
 ```

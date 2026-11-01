@@ -6,10 +6,11 @@ import numpy as np
 from allocation import FAULT_YAW_WEIGHT, NORMAL_WEIGHTS, stock_mix, wls_allocate
 from quad import GRAVITY, QuadParams, allocation_matrix
 
-KP_POS = 3.0                  # position error -> acceleration [1/s^2]
-KD_POS = 2.5                  # velocity error -> acceleration [1/s]
-K_ATT = 8.0                   # attitude error -> desired body rate [1/s]
-K_RATE = 25.0                 # rate error -> desired angular acceleration [1/s]
+# Tuned to also fly CrazySim's drone models, whose motors are 2-5x slower than motor_tau here
+KP_POS = 2.5                  # position error -> acceleration [1/s^2]
+KD_POS = 2.25                 # velocity error -> acceleration [1/s]
+K_ATT = 4.0                   # attitude error -> desired body rate [1/s]
+K_RATE = 20.0                 # rate error -> desired angular acceleration [1/s]
 NORMAL_TILT = np.deg2rad(25.0)
 FAULT_TILT = np.deg2rad(15.0)
 THRUST_MARGIN = 0.9
@@ -133,6 +134,13 @@ class IndiWlsController:
         self.w_f = w_f
         self.tau_f = self.tau_f + self.alpha * (allocation_matrix(p)[1:] @ self.f_est - self.tau_f)
         tau_cmd = self.tau_f + p.inertia @ (nu - w_dot_f)
+        # A spinning body sees the roll/pitch torque it needs turn at the spin rate, and the motors
+        # (a first-order lag) deliver it late and weaker: lead it by that phase and gain.
+        # No effect when not spinning.
+        lag = w[2] * p.motor_tau
+        c, s = np.cos(np.arctan(lag)), -np.sin(np.arctan(lag))
+        gain = np.sqrt(1.0 + lag * lag)
+        tau_cmd[:2] = gain * np.array([c * tau_cmd[0] - s * tau_cmd[1], s * tau_cmd[0] + c * tau_cmd[1]])
 
         yaw_weight = (1.0 - ramp) + ramp * FAULT_YAW_WEIGHT
         weights = NORMAL_WEIGHTS * np.array([1.0, 1.0, 1.0, yaw_weight])

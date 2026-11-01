@@ -1,0 +1,145 @@
+diff --git a/simulator_files/mujoco/crazysim.py b/simulator_files/mujoco/crazysim.py
+index d4a7eb9..942453d 100644
+--- a/simulator_files/mujoco/crazysim.py
++++ b/simulator_files/mujoco/crazysim.py
+@@ -668,7 +668,8 @@ class DroneAgent:
+                  wind_model: WindModel | None = None,
+                  ground_effect: bool = False,
+                  camera_renderer: CameraRenderer | None = None,
+-                 flowdeck: bool = False):
++                 flowdeck: bool = False,
++                 yaw_drag: float = 0.0):
+         self.agent_id = agent_id
+         self.model = model
+         self.data = data
+@@ -761,6 +762,7 @@ class DroneAgent:
+         self._noise_model = noise_model
+         self._wind_model = wind_model
+         self._ground_effect = ground_effect
++        self._yaw_drag = yaw_drag
+         self._camera = camera_renderer
+ 
+         print(f'[crazysim] Agent {agent_id}: fw_port={fw_port}  cflib_port={cflib_port}')
+@@ -966,6 +968,8 @@ class DroneAgent:
+              ang_vel_body[0] * h_z,
+              0.0,
+         ])
++        # Optional quadratic yaw damping (air drag on the spinning body and rotors) [N m s^2]
++        gyro_torque[2] = -self._yaw_drag * ang_vel_body[2] * abs(ang_vel_body[2])
+ 
+         # Apply as generalized forces on the free joint DOFs
+         # Translational (world frame): drag force
+@@ -1188,6 +1192,7 @@ class CrazySimMuJoCo:
+                  ground_effect: bool = False,
+                  flowdeck: bool = False,
+                  downwash: bool = False,
++                 yaw_drag: float = 0.0,
+                  camera_enabled: bool = False,
+                  cam_width: int = 324, cam_height: int = 244,
+                  cam_fps: float = 20.0,
+@@ -1261,6 +1266,7 @@ class CrazySimMuJoCo:
+                 ground_effect=ground_effect,
+                 camera_renderer=agent_camera,
+                 flowdeck=flowdeck,
++                yaw_drag=yaw_drag,
+             )
+             self.agents.append(agent)
+ 
+@@ -1324,6 +1330,20 @@ class CrazySimMuJoCo:
+         _rtf_sim_start = self.data.time
+         _rtf_value = 0.0
+ 
++        # Pace against the wall clock, not per step: a slow step (e.g. a rendered frame) is made up
++        # over the next steps, so the sim stays at real time like the firmware it talks to.
++        _pace_wall = time.perf_counter()
++        _pace_sim = self.data.time
++
++        def _keep_real_time():
++            nonlocal _pace_wall, _pace_sim
++            ahead = (self.data.time - _pace_sim) - (time.perf_counter() - _pace_wall)
++            if ahead > 0:
++                time.sleep(ahead)
++            elif ahead < -0.1:   # can't keep up: don't try to catch up in a burst
++                _pace_wall = time.perf_counter()
++                _pace_sim = self.data.time
++
+         def _update_rtf():
+             nonlocal _rtf_wall_start, _rtf_sim_start, _rtf_value
+             wall_now = time.perf_counter()
+@@ -1363,21 +1383,14 @@ class CrazySimMuJoCo:
+                         ))
+                         v.sync()
+                         _last_render = t0
+-                    elapsed = time.perf_counter() - t0
+-                    sleep_t = self.dt - elapsed
+-                    if sleep_t > 0:
+-                        time.sleep(sleep_t)
++                    _keep_real_time()
+             self._running = False
+         else:
+             try:
+                 while self._running:
+-                    t0 = time.perf_counter()
+                     _step_and_send()
+                     _update_rtf()
+-                    elapsed = time.perf_counter() - t0
+-                    sleep_t = self.dt - elapsed
+-                    if sleep_t > 0:
+-                        time.sleep(sleep_t)
++                    _keep_real_time()
+             except KeyboardInterrupt:
+                 pass
+ 
+@@ -1466,6 +1479,8 @@ def main():
+                    help='Simulate flowdeck (TOF + optical flow, disables pose)')
+     p.add_argument('--ground-effect', action='store_true',
+                    help='Enable Cheeseman-Bennett ground effect model')
++    p.add_argument('--yaw-drag', type=float, default=0.0,
++                   help='Quadratic yaw damping [N m s^2] (default 0: none)')
+     p.add_argument('--downwash', action='store_true',
+                    help='Enable inter-drone downwash interaction')
+     p.add_argument('--camera', action='store_true',
+@@ -1543,6 +1558,7 @@ def main():
+         wind_model=wind_model,
+         ground_effect=args.ground_effect,
+         flowdeck=args.flowdeck,
++        yaw_drag=args.yaw_drag,
+         downwash=args.downwash,
+         camera_enabled=args.camera,
+         cam_width=args.cam_width,
+diff --git a/simulator_files/mujoco/launch/sitl_singleagent.sh b/simulator_files/mujoco/launch/sitl_singleagent.sh
+index ea7c5e7..2c2b5b1 100755
+--- a/simulator_files/mujoco/launch/sitl_singleagent.sh
++++ b/simulator_files/mujoco/launch/sitl_singleagent.sh
+@@ -29,6 +29,7 @@ if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+ 	echo "  --wind-direction <deg> Wind direction (0=+X, 90=+Y, 180=-X, 270=-Y)"
+ 	echo "  --gust-intensity <m/s> Random gust peak deviation"
+ 	echo "  --turbulence <level>  Dryden turbulence (none, light, moderate, severe)"
++	echo "  --yaw-drag <k>        Quadratic yaw damping [N m s^2] (default 0: none)"
+ 	exit 1
+ fi
+ 
+@@ -37,6 +38,7 @@ SENSOR_NOISE=""
+ GROUND_EFFECT=""
+ FLOWDECK=""
+ WIND_ARGS=""
++YAW_DRAG=""
+ POSITIONAL=()
+ while [[ $# -gt 0 ]]; do
+ 	case "$1" in
+@@ -47,6 +49,7 @@ while [[ $# -gt 0 ]]; do
+ 		--wind-direction) WIND_ARGS="$WIND_ARGS --wind-direction $2"; shift 2;;
+ 		--gust-intensity) WIND_ARGS="$WIND_ARGS --gust-intensity $2"; shift 2;;
+ 		--turbulence)     WIND_ARGS="$WIND_ARGS --turbulence $2"; shift 2;;
++		--yaw-drag)       YAW_DRAG="--yaw-drag $2"; shift 2;;
+ 		*) POSITIONAL+=("$1"); shift;;
+ 	esac
+ done
+@@ -104,6 +107,7 @@ python3 "$crazysim_dir/crazysim.py" \
+ 	${GROUND_EFFECT} \
+ 	${FLOWDECK} \
+ 	${WIND_ARGS} \
++	${YAW_DRAG} \
+ 	${mass_arg} \
+ 	${scene_arg} \
+ 	-- "${x_cord},${y_cord}"
