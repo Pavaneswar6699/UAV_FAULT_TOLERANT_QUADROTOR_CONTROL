@@ -1,0 +1,7 @@
+# simulation and analysis (works on any laptop)
+numpy
+scipy
+matplotlib
+# real flights (Crazyflie radio + lab motion capture)
+cflib
+motioncapture

@@ -1,0 +1,2 @@
+obj-y += ftc_core.o
+obj-y += ftc_controller.o
