@@ -1,0 +1,50 @@
+{
+  "baseline": {
+    "mode": "ftc",
+    "fault_motor": 0,
+    "result": "landed",
+    "t_end": 15.675,
+    "touchdown_speed": 0.1522418659473231,
+    "touchdown_tilt": 0.017503873304049032,
+    "t_fault": null,
+    "max_tilt_after_fault": 0.0,
+    "max_yaw_rate": 0.018676534646347834,
+    "final_pos": [
+      -2.966509168839813e-05,
+      -5.26926837940391e-05,
+      -1.3681413577796393e-06
+    ]
+  },
+  "pid": {
+    "mode": "pid",
+    "fault_motor": 1,
+    "result": "crashed",
+    "t_end": 6.305,
+    "touchdown_speed": 2.863623535565504,
+    "touchdown_tilt": 34.50092017184793,
+    "t_fault": 5.833333333333334,
+    "max_tilt_after_fault": 69.95886337882573,
+    "max_yaw_rate": 0.8001958202645651,
+    "final_pos": [
+      0.6068216945928969,
+      0.3985449639228641,
+      -0.0026185393458424346
+    ]
+  },
+  "ftc": {
+    "mode": "ftc",
+    "fault_motor": 1,
+    "result": "landed",
+    "t_end": 8.614,
+    "touchdown_speed": 0.521301978415996,
+    "touchdown_tilt": 5.576824835295632,
+    "t_fault": 5.833333333333334,
+    "max_tilt_after_fault": 5.576824835295632,
+    "max_yaw_rate": 24.775799882704927,
+    "final_pos": [
+      0.5068093296549931,
+      0.5505617437313545,
+      -1.803376446285151e-06
+    ]
+  }
+}
